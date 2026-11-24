@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Equipment Report">
+<meta name="format-detection" content="telephone=no">
+<title>Non Vehicle Equipment Incident Report</title>
+</head>
+<body style="margin:0">
+<!--
+  NON VEHICLE EQUIPMENT INCIDENT REPORT  —  S&C Field Reporting Tool
+  Self-contained HTML, backed by a Supabase database.
+  Hosted on GitHub Pages (MorningReport-source/equipment-incident-report); every visitor reads/writes the same log.
+
+  CONFIG: edit the two lists below (SUBDIVISIONS / EQUIPMENT_TYPES), the
+  NOTIFY_DEFAULT email and the SUPABASE_* values. Admin access uses Supabase
+  logins you create in the Supabase dashboard (no passcode in this file).
+-->
+<div id="app"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<script>
+  // ---- CONFIG (edit these) -------------------------------------------------
+  const SUBDIVISIONS = [
+    "Valley", "Ventura", "Orange", "San Gabriel",
+    "Pasadena", "River", "Olive", "Other"
+  ];
+  const EQUIPMENT_TYPES = [
+    "Laptop / Tablet", "Test Equipment / Meter",
+    "Hand Tool", "Radio", "Hotspot / Modem",
+    "Camera", "PPE", "Other"
+  ];
+  const STATUSES = ["Damaged", "Lost", "Stolen", "Request"];
+  const NOTIFY_DEFAULT = ""; // optional: a default supervisor/safety email
+  // Notification recipient copied on every report and request (Mike Moore).
+  const NOTIFY_EMAIL = "mmoore@herzog.com";
+  // Extra people copied on every TOOL REQUEST email (alongside NOTIFY_EMAIL).
+  // Edit this list to add/remove request recipients.
+  const REQUEST_NOTIFY_EMAILS = ["dcorona@herzog.com", "wbradshaw@herzog.com", "aahumada@herzog.com"];
+  // ---- Supabase connection (your project) ----
+  const SUPABASE_URL = "https://mphsompvkyznpyhuyvkv.supabase.co";
+  const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1waHNvbXB2a3l6bnB5aHV5dmt2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMzQ2MDMsImV4cCI6MjA5NjYxMDYwM30.6YGl1X7LKkQfg-tHHS4tGk7hauY7hdyp1FIhaxuhl18";
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  // -------------------------------------------------------------------------
+</script>
+
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --paper: #f3f1ec;          /* working surface */
+    --panel: #ffffff;
+    --ink: #1b2228;            /* near-black steel */
+    --ink-soft: #5a646d;
+    --line: #d7d2c8;
+    --steel: #2c3a45;          /* structural frame */
+    --steel-deep: #1d2830;
+    --hivis: #d8e000;          /* safety hi-vis accent */
+    --damaged: #2f9e6f;        /* signal: clear/green */
+    --lost: #e0a800;           /* signal: caution/amber */
+    --stolen: #cf3a2e;         /* signal: stop/red */
+    --request: #2f6fb0;        /* tool request: blue */
+    --radius: 3px;
+    --shadow: 0 1px 0 rgba(0,0,0,.04), 0 2px 8px rgba(28,40,48,.06);
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+
+  #app {
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    min-height: 100vh;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 18px 64px; }
+
+  /* ---- Masthead ---- */
+  .mast {
+    background: var(--steel-deep);
+    color: #eef1f0;
+    border-bottom: 4px solid var(--hivis);
+  }
+  .mast-inner {
+    max-width: 1040px; margin: 0 auto; padding: 20px 18px 16px;
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+  }
+  .mast h1 {
+    font-family: 'Saira Condensed', sans-serif;
+    font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    margin: 0; font-size: 30px; line-height: 1;
+  }
+  .mast .sub {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+    letter-spacing: .14em; text-transform: uppercase;
+    color: var(--hivis); margin-top: 6px;
+  }
+  .tabs { display: flex; gap: 0; }
+  .tab {
+    font-family: 'Saira Condensed', sans-serif; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em; font-size: 15px;
+    background: transparent; color: #9fb0ba; border: 0;
+    padding: 10px 18px; cursor: pointer; border-bottom: 3px solid transparent;
+  }
+  .tab:hover { color: #eef1f0; }
+  .tab.active { color: var(--ink); background: var(--hivis); border-bottom-color: var(--hivis); }
+
+  /* ---- Cards / sections ---- */
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); box-shadow: var(--shadow);
+    margin-top: 22px;
+  }
+  .card-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(var(--panel), #faf9f6);
+  }
+  .card-head .num {
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+    background: var(--steel); color: var(--hivis);
+    padding: 3px 7px; border-radius: 2px; letter-spacing: .08em;
+  }
+  .card-head h2 {
+    font-family: 'Saira Condensed', sans-serif; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em; font-size: 18px; margin: 0;
+  }
+  .card-body { padding: 20px; }
+
+  /* ---- Form ---- */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field.full { grid-column: 1 / -1; }
+  label {
+    font-size: 12px; font-weight: 600; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--ink-soft);
+  }
+  label .req { color: var(--stolen); }
+  input[type="text"], input[type="email"], input[type="date"], select, textarea {
+    font-family: 'IBM Plex Sans', sans-serif; font-size: 15px; color: var(--ink);
+    background: #fcfbf8; border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 10px 12px; width: 100%;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--steel);
+    box-shadow: 0 0 0 3px rgba(44,58,69,.12);
+  }
+  textarea { resize: vertical; min-height: 110px; }
+
+  /* status radios as defect tags */
+  .status-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .status-opt { position: relative; flex: 1; min-width: 120px; }
+  .status-opt input { position: absolute; opacity: 0; pointer-events: none; }
+  .status-opt span {
+    display: block; text-align: center; cursor: pointer; user-select: none;
+    font-family: 'Saira Condensed', sans-serif; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em; font-size: 16px;
+    padding: 12px; border: 1px solid var(--line); border-radius: var(--radius);
+    background: #fcfbf8; color: var(--ink-soft);
+    border-left: 5px solid var(--line);
+  }
+  .status-opt[data-s="Damaged"] span { border-left-color: var(--damaged); }
+  .status-opt[data-s="Lost"]    span { border-left-color: var(--lost); }
+  .status-opt[data-s="Stolen"]  span { border-left-color: var(--stolen); }
+  .status-opt[data-s="Request"] span { border-left-color: var(--request); }
+  .status-opt input:checked + span { color: #fff; }
+  .status-opt[data-s="Damaged"] input:checked + span { background: var(--damaged); border-color: var(--damaged); }
+  .status-opt[data-s="Lost"]    input:checked + span { background: var(--lost);    border-color: var(--lost); }
+  .status-opt[data-s="Stolen"]  input:checked + span { background: var(--stolen);  border-color: var(--stolen); }
+  .status-opt[data-s="Request"] input:checked + span { background: var(--request); border-color: var(--request); }
+
+  /* photo upload */
+  .drop {
+    border: 1.5px dashed var(--line); border-radius: var(--radius);
+    padding: 18px; text-align: center; cursor: pointer; background: #fcfbf8;
+    color: var(--ink-soft); font-size: 14px;
+  }
+  .drop:hover { border-color: var(--steel); }
+  .drop strong { color: var(--ink); }
+  .preview { margin-top: 12px; display: none; }
+  .preview img { max-width: 100%; max-height: 240px; border-radius: var(--radius); border: 1px solid var(--line); }
+  .preview button {
+    display: inline-block; margin-top: 8px; font-size: 13px; color: var(--stolen);
+    background: none; border: none; cursor: pointer; text-decoration: underline;
+  }
+
+  .actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 4px; }
+  .btn {
+    font-family: 'Saira Condensed', sans-serif; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em; font-size: 16px;
+    border: none; border-radius: var(--radius); padding: 12px 26px; cursor: pointer;
+  }
+  .btn-primary { background: var(--steel); color: var(--hivis); }
+  .btn-primary:hover { background: var(--steel-deep); }
+  .btn-ghost { background: transparent; color: var(--ink-soft); border: 1px solid var(--line); }
+  .err-text { color: var(--stolen); font-size: 12px; }
+  input.invalid, select.invalid, textarea.invalid { border-color: var(--stolen); background: #fdf3f2; }
+
+  /* confirmation */
+  .confirm { text-align: center; padding: 40px 20px; }
+  .confirm .tag {
+    display: inline-block; font-family: 'IBM Plex Mono', monospace;
+    background: var(--steel); color: var(--hivis); padding: 6px 12px;
+    border-radius: 2px; letter-spacing: .1em; margin: 10px 0 18px;
+  }
+
+  /* ---- Metrics ---- */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 14px; }
+  .kpi {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px; box-shadow: var(--shadow); border-top: 4px solid var(--steel);
+  }
+  .kpi.d { border-top-color: var(--damaged); }
+  .kpi.l { border-top-color: var(--lost); }
+  .kpi.s { border-top-color: var(--stolen); }
+  .kpi.rq { border-top-color: var(--request); }
+  .kpi.open { border-top-color: var(--lost); }
+  .kpi.closed { border-top-color: var(--damaged); }
+  .kpi .v { font-family: 'IBM Plex Mono', monospace; font-size: 34px; font-weight: 500; line-height: 1; }
+  .kpi .k { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-soft); margin-top: 8px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th {
+    font-family: 'Saira Condensed', sans-serif; text-transform: uppercase; letter-spacing: .05em;
+    font-size: 13px; text-align: left; color: var(--ink-soft);
+    padding: 10px 12px; border-bottom: 2px solid var(--line);
+  }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:hover td { background: #faf9f6; }
+  .count-bar { display: flex; align-items: center; gap: 8px; }
+  .count-bar .bar { height: 8px; background: var(--steel); border-radius: 2px; }
+  .repeat-flag {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 500;
+    background: var(--stolen); color: #fff; padding: 2px 7px; border-radius: 2px; letter-spacing: .05em;
+  }
+  .pill {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 2px 8px;
+    border-radius: 10px; letter-spacing: .03em; white-space: nowrap;
+  }
+  .pill.Damaged { background: rgba(47,158,111,.15); color: #1d6b49; }
+  .pill.Lost    { background: rgba(224,168,0,.18);  color: #8a6500; }
+  .pill.Stolen  { background: rgba(207,58,46,.15);  color: #9c2c23; }
+  .pill.Request { background: rgba(47,111,176,.15); color: #235784; }
+  .state-badge {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500;
+    padding: 2px 7px; border-radius: 2px; letter-spacing: .06em; white-space: nowrap;
+  }
+  .state-badge.open   { background: var(--lost); color: #fff; }
+  .state-badge.closed { background: var(--damaged); color: #fff; }
+
+  .log-row td .meta { color: var(--ink-soft); font-size: 12px; }
+  .log-thumb { width: 46px; height: 46px; object-fit: cover; border-radius: 2px; border: 1px solid var(--line); cursor: pointer; }
+  .empty { text-align: center; color: var(--ink-soft); padding: 40px 20px; font-size: 14px; }
+
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+  .toolbar input, .toolbar select { width: auto; }
+  .link-btn { background: none; border: none; color: var(--steel); text-decoration: underline; cursor: pointer; font-size: 13px; }
+
+  /* modal */
+  .modal-bg {
+    position: fixed; inset: 0; background: rgba(20,28,34,.6); display: none;
+    align-items: center; justify-content: center; padding: 20px; z-index: 50;
+  }
+  .modal {
+    background: var(--panel); border-radius: var(--radius); max-width: 560px; width: 100%;
+    max-height: 90vh; overflow: auto; box-shadow: 0 12px 40px rgba(0,0,0,.3);
+  }
+  .modal img { width: 100%; border-radius: var(--radius); }
+  .dl-row { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+  .dl-row .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-soft); }
+  .dl-row .v { font-size: 15px; }
+
+  .notice {
+    font-size: 12px; color: var(--ink-soft); margin-top: 10px;
+    border-left: 3px solid var(--hivis); padding: 6px 0 6px 12px;
+  }
+  .loading { text-align: center; padding: 60px; color: var(--ink-soft); font-family: 'IBM Plex Mono', monospace; }
+
+  @media (max-width: 720px) {
+    input[type="text"], input[type="email"], input[type="password"], input[type="date"], select, textarea { font-size: 16px; }
+    .grid { grid-template-columns: 1fr; }
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .mast-inner { flex-direction: column; align-items: stretch; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<script>
+(function () {
+  const app = document.getElementById('app');
+  let reports = [];
+  let view = 'file';
+  let toast = null;
+  let isAdmin = false; // true when an admin is logged in via Supabase Auth
+
+  const uid = () => 'IR-' + Date.now().toString(36).toUpperCase() + '-' +
+    Math.floor(Math.random() * 1296).toString(36).toUpperCase().padStart(2, '0');
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  const fmtDate = (d) => { try { return new Date(d + 'T00:00:00').toLocaleDateString('en-US',
+    { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return d; } };
+
+  // ---- storage ----
+  async function loadReports() {
+    try {
+      const { data, error } = await sb
+        .from('incident_reports')
+        .select('id, created_at, report')
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      // Reports with no saved state (older rows) are treated as Open.
+      reports = (data || []).map(row => Object.assign({ state: 'open' }, row.report, { dbId: row.id }));
+    } catch (e) { console.error('load failed', e); reports = []; }
+  }
+  async function insertReport(record, photoData) {
+    // No .select() here: under RLS, anonymous filers can INSERT but not SELECT,
+    // so we must not ask for the row back.
+    const { error } = await sb
+      .from('incident_reports')
+      .insert({ report: record, photo: photoData || null });
+    if (error) throw error;
+  }
+  async function updateReport(dbId, record) {
+    const payload = Object.assign({}, record);
+    delete payload.dbId; // dbId is local only, not part of the stored report
+    const { error } = await sb.from('incident_reports').update({ report: payload }).eq('id', dbId);
+    if (error) throw error;
+  }
+  async function signIn(email, password) {
+    const { error } = await sb.auth.signInWithPassword({ email: email, password: password });
+    if (error) throw error;
+  }
+  async function signOut() { try { await sb.auth.signOut(); } catch (e) { console.error(e); } }
+  async function checkSession() {
+    try { const { data } = await sb.auth.getSession(); isAdmin = !!(data && data.session); }
+    catch (e) { isAdmin = false; }
+  }
+  async function deleteReport(dbId) {
+    const { error } = await sb.from('incident_reports').delete().eq('id', dbId);
+    if (error) throw error;
+  }
+  async function loadImage(reportId) {
+    try {
+      const rep = reports.find(r => r.id === reportId);
+      if (!rep || rep.dbId == null) return null;
+      const { data, error } = await sb
+        .from('incident_reports')
+        .select('photo')
+        .eq('id', rep.dbId)
+        .single();
+      if (error) throw error;
+      return data ? data.photo : null;
+    } catch (e) { console.error('image load failed', e); return null; }
+  }
+
+  // ---- image compression ----
+  function compressImage(file, cb) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const max = 1280;
+        let { width: w, height: h } = img;
+        if (w > max || h > max) { const r = Math.min(max / w, max / h); w = Math.round(w * r); h = Math.round(h * r); }
+        const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(img, 0, 0, w, h);
+        cb(cv.toDataURL('image/jpeg', 0.72));
+      };
+      img.onerror = () => cb(null);
+      img.src = e.target.result;
+    };
+    reader.onerror = () => cb(null);
+    reader.readAsDataURL(file);
+  }
+
+  // ================= RENDER =================
+  function render() {
+    app.innerHTML = `
+      <div class="mast"><div class="mast-inner">
+        <div>
+          <h1>Non Vehicle Equipment Incident Report</h1>
+          <div class="sub">S&amp;C Field Reporting &middot; Damaged / Lost / Stolen</div>
+        </div>
+        <div class="tabs">
+          <button class="tab ${view==='file'?'active':''}" data-v="file">File a report</button>
+          <button class="tab ${view==='metrics'?'active':''}" data-v="metrics">Reports &amp; metrics ${isAdmin ? '' : '&#128274;'}</button>
+        </div>
+      </div></div>
+      <div class="wrap" id="content"></div>
+      <div class="modal-bg" id="modalBg"><div class="modal" id="modalBody"></div></div>`;
+
+    app.querySelectorAll('.tab').forEach(t =>
+      t.onclick = () => { view = t.dataset.v; render(); });
+    app.querySelector('#modalBg').onclick = (e) => { if (e.target.id === 'modalBg') closeModal(); };
+
+    if (view === 'file') renderForm();
+    else if (!isAdmin) renderGate();
+    else renderMetrics();
+    if (toast) { showConfirm(toast); toast = null; }
+  }
+
+  // ---- ADMIN LOGIN (Supabase Auth) ----
+  function renderGate() {
+    const c = document.getElementById('content');
+    c.innerHTML = `
+      <div class="card" style="max-width:440px;margin:48px auto 0">
+        <div class="card-head"><span class="num">&#128274;</span><h2>Admin sign in</h2></div>
+        <div class="card-body">
+          <p style="color:var(--ink-soft);margin:0 0 18px;font-size:14px">
+            Reports &amp; metrics are limited to administrators. Sign in to continue.
+          </p>
+          <div class="field" style="margin-bottom:14px">
+            <label for="f-email">Email</label>
+            <input type="email" id="f-email" autocomplete="username" autofocus>
+          </div>
+          <div class="field" style="margin-bottom:16px">
+            <label for="f-pass">Password</label>
+            <input type="password" id="f-pass" autocomplete="current-password">
+            <div class="err-text" id="err-login" style="display:none">Incorrect email or password.</div>
+          </div>
+          <div class="actions">
+            <button class="btn btn-ghost" id="backBtn">Back to form</button>
+            <button class="btn btn-primary" id="loginBtn">Sign in</button>
+          </div>
+        </div>
+      </div>`;
+    const emailEl = c.querySelector('#f-email');
+    const passEl = c.querySelector('#f-pass');
+    const errEl = c.querySelector('#err-login');
+    const loginBtn = c.querySelector('#loginBtn');
+    const tryLogin = async () => {
+      errEl.style.display = 'none';
+      const email = (emailEl.value || '').trim();
+      const password = passEl.value || '';
+      if (!email || !password) { errEl.textContent = 'Enter your email and password.'; errEl.style.display = 'block'; return; }
+      loginBtn.disabled = true; loginBtn.textContent = 'Signing in…';
+      try {
+        await signIn(email, password);
+        isAdmin = true;
+        await loadReports();
+        view = 'metrics';
+        render();
+      } catch (e) {
+        loginBtn.disabled = false; loginBtn.textContent = 'Sign in';
+        errEl.textContent = 'Incorrect email or password.';
+        errEl.style.display = 'block';
+        passEl.select();
+      }
+    };
+    loginBtn.onclick = tryLogin;
+    passEl.onkeydown = (e) => { if (e.key === 'Enter') tryLogin(); };
+    c.querySelector('#backBtn').onclick = () => { view = 'file'; render(); };
+  }
+
+  // ---- FORM ----
+  function renderForm() {
+    const c = document.getElementById('content');
+    c.innerHTML = `
+      <div class="card">
+        <div class="card-head"><span class="num">FORM</span><h2>Incident details</h2></div>
+        <div class="card-body">
+          <div class="field full" style="margin-bottom:16px">
+            <label>Equipment status <span class="req">*</span></label>
+            <div class="status-row" id="statusRow">
+              ${STATUSES.map(s => `
+                <label class="status-opt" data-s="${s}">
+                  <input type="radio" name="status" value="${s}"><span>${s}</span>
+                </label>`).join('')}
+            </div>
+            <div class="err-text" id="err-status" style="display:none">Select a status.</div>
+          </div>
+
+          <div class="grid">
+            <div class="field">
+              <label for="f-name">Employee name <span class="req">*</span></label>
+              <input type="text" id="f-name" autocomplete="off">
+              <div class="err-text" id="err-name" style="display:none">Required.</div>
+            </div>
+            <div class="field">
+              <label for="f-date">Date of incident <span class="req">*</span></label>
+              <input type="date" id="f-date">
+              <div class="err-text" id="err-date" style="display:none">Required.</div>
+            </div>
+            <div class="field">
+              <label for="f-sub">Subdivision <span class="req">*</span></label>
+              <select id="f-sub">
+                <option value="">— Select —</option>
+                ${SUBDIVISIONS.map(s => `<option>${s}</option>`).join('')}
+              </select>
+              <div class="err-text" id="err-sub" style="display:none">Required.</div>
+            </div>
+            <div class="field">
+              <label for="f-equip">Type of equipment <span class="req">*</span></label>
+              <select id="f-equip">
+                <option value="">— Select —</option>
+                ${EQUIPMENT_TYPES.map(s => `<option>${s}</option>`).join('')}
+              </select>
+              <div class="err-text" id="err-equip" style="display:none">Required.</div>
+            </div>
+            <div class="field full">
+              <label for="f-loc">Location incident occurred <span class="req">*</span></label>
+              <input type="text" id="f-loc" placeholder="Yard, MP, crossing, address…" autocomplete="off">
+              <div class="err-text" id="err-loc" style="display:none">Required.</div>
+            </div>
+            <div class="field full">
+              <label for="f-summary">Summary of events <span class="req">*</span></label>
+              <textarea id="f-summary" placeholder="What happened, in sequence."></textarea>
+              <div class="err-text" id="err-summary" style="display:none">Required.</div>
+            </div>
+            <div class="field">
+              <label for="f-sup">Reporting party's supervisor <span class="req">*</span></label>
+              <input type="text" id="f-sup" autocomplete="off">
+              <div class="err-text" id="err-sup" style="display:none">Required.</div>
+            </div>
+            <div class="field">
+              <label for="f-supemail">Supervisor email <span style="text-transform:none;font-weight:400">(for notification)</span></label>
+              <input type="email" id="f-supemail" placeholder="${NOTIFY_DEFAULT || 'name@company.com'}" autocomplete="off">
+            </div>
+            <div class="field full">
+              <label>Photo of equipment / damage</label>
+              <div class="drop" id="drop"><strong>Tap to add a photo</strong> &middot; or drag a file here</div>
+              <input type="file" id="f-photo" accept="image/*" style="display:none">
+              <div class="preview" id="preview"><img id="previewImg"><br><button type="button" id="removePhoto">Remove photo</button></div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="btn btn-ghost" id="resetBtn">Clear</button>
+            <button class="btn btn-primary" id="submitBtn">Submit report</button>
+          </div>
+          <div class="notice">Submitted reports are saved to a shared log visible to everyone who opens this tool, including supervisors reviewing metrics.</div>
+        </div>
+      </div>`;
+
+    // photo handling
+    let photoData = null;
+    const drop = c.querySelector('#drop');
+    const fileInput = c.querySelector('#f-photo');
+    const preview = c.querySelector('#preview');
+    const previewImg = c.querySelector('#previewImg');
+    drop.onclick = () => fileInput.click();
+    drop.ondragover = (e) => { e.preventDefault(); drop.style.borderColor = 'var(--steel)'; };
+    drop.ondragleave = () => { drop.style.borderColor = ''; };
+    drop.ondrop = (e) => { e.preventDefault(); drop.style.borderColor = ''; if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); };
+    fileInput.onchange = () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); };
+    c.querySelector('#removePhoto').onclick = () => { photoData = null; preview.style.display = 'none'; fileInput.value = ''; };
+    function handleFile(f) {
+      if (!f.type.startsWith('image/')) { alert('Please choose an image file.'); return; }
+      drop.querySelector('strong').textContent = 'Processing…';
+      compressImage(f, (d) => {
+        drop.querySelector('strong').textContent = 'Tap to add a photo';
+        if (!d) { alert('Could not read that image.'); return; }
+        photoData = d; previewImg.src = d; preview.style.display = 'block';
+      });
+    }
+
+    c.querySelector('#resetBtn').onclick = () => renderForm();
+
+    c.querySelector('#submitBtn').onclick = async () => {
+      const get = (id) => (document.getElementById(id).value || '').trim();
+      const statusEl = c.querySelector('input[name="status"]:checked');
+      const fields = {
+        status: statusEl ? statusEl.value : '',
+        name: get('f-name'), date: get('f-date'), subdivision: get('f-sub'),
+        equipment: get('f-equip'), location: get('f-loc'), summary: get('f-summary'),
+        supervisor: get('f-sup'), supervisorEmail: get('f-supemail')
+      };
+      const required = ['status','name','date','sub','equip','loc','summary','sup'];
+      const map = { status:'status', name:'name', date:'date', sub:'subdivision', equip:'equipment', loc:'location', summary:'summary', sup:'supervisor' };
+      let ok = true;
+      required.forEach(k => {
+        const val = fields[map[k]];
+        const errEl = document.getElementById('err-' + k);
+        const inputEl = document.getElementById('f-' + (k === 'status' ? '' : k));
+        if (!val) { ok = false; errEl.style.display = 'block'; if (inputEl) inputEl.classList.add('invalid'); }
+        else { errEl.style.display = 'none'; if (inputEl) inputEl.classList.remove('invalid'); }
+      });
+      if (!ok) return;
+
+      const btn = c.querySelector('#submitBtn');
+      btn.disabled = true; btn.textContent = 'Saving…';
+      const id = uid();
+      const record = { id, ...fields, state: 'open', note: '', hasPhoto: !!photoData, submittedAt: new Date().toISOString() };
+      try {
+        await insertReport(record, photoData);
+        reports.push(record);
+        toast = record;
+        render();
+      } catch (e) {
+        btn.disabled = false; btn.textContent = 'Submit report';
+        let banner = c.querySelector('#saveError');
+        if (!banner) {
+          banner = document.createElement('div');
+          banner.id = 'saveError';
+          banner.className = 'notice';
+          banner.style.cssText = 'border-left-color:var(--stolen);color:var(--stolen);margin-top:14px';
+          const actions = c.querySelector('.actions');
+          if (actions) actions.after(banner); else c.appendChild(banner);
+        }
+        banner.innerHTML = "Couldn't save this report &mdash; the database didn't respond. Check your internet connection and try again. If it keeps happening, the Supabase connection settings may need a look.";
+        banner.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    };
+
+    // default date = today
+    const today = new Date(); const off = today.getTimezoneOffset();
+    document.getElementById('f-date').value = new Date(today - off * 60000).toISOString().slice(0, 10);
+  }
+
+  // ---- CONFIRMATION ----
+  function showConfirm(rec) {
+    const c = document.getElementById('content');
+    const isRequest = rec.status === 'Request';
+    // Incidents count toward repeat tracking; requests do not.
+    const repeatCount = isRequest ? 0 : reports.filter(r => r.status !== 'Request' && normName(r.name) === normName(rec.name)).length;
+    const notify = (NOTIFY_EMAIL || '').trim();
+    // Requests go to the notification address; incidents go to the supervisor.
+    // The notification address (Moore) is always included as a recipient.
+    const primary = isRequest ? notify : (rec.supervisorEmail || '').trim();
+    const recips = [];
+    if (primary) recips.push(primary);
+    if (notify && recips.indexOf(notify) === -1) recips.push(notify);
+    if (isRequest) {
+      REQUEST_NOTIFY_EMAILS.forEach(e => { e = (e || '').trim(); if (e && recips.indexOf(e) === -1) recips.push(e); });
+    }
+    if (!recips.length && NOTIFY_DEFAULT) recips.push(NOTIFY_DEFAULT);
+    const to = recips.join(',');
+    const subject = isRequest
+      ? `Tool Request ${rec.id} — ${rec.name}`
+      : `Non Vehicle Equipment Incident Report ${rec.id} — ${rec.status} — ${rec.name}`;
+    const body = isRequest ?
+`A new tool/equipment request has been submitted.
+
+Request ID: ${rec.id}
+Employee: ${rec.name}
+Date: ${fmtDate(rec.date)}
+Subdivision: ${rec.subdivision}
+Location: ${rec.location}
+Equipment requested: ${rec.equipment}
+Supervisor: ${rec.supervisor}
+
+Details:
+${rec.summary}` :
+`A new equipment incident report has been filed.
+
+Report ID: ${rec.id}
+Status: ${rec.status}
+Employee: ${rec.name}
+Date of incident: ${fmtDate(rec.date)}
+Subdivision: ${rec.subdivision}
+Location: ${rec.location}
+Equipment: ${rec.equipment}
+Supervisor: ${rec.supervisor}
+
+Summary:
+${rec.summary}
+
+${repeatCount > 1 ? `NOTE: This is incident #${repeatCount} on record for this employee.` : ''}`;
+    const mailto = `mailto:${recips.map(encodeURIComponent).join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    const emailLabel = isRequest ? 'Email request to M. Moore' : 'Notify supervisor & Moore';
+
+    c.innerHTML = `
+      <div class="card"><div class="card-body confirm">
+        <div style="font-size:46px;line-height:1;color:var(--damaged);margin-bottom:8px">&#10003;</div>
+        <div style="font-family:'Saira Condensed';font-size:24px;text-transform:uppercase;letter-spacing:.05em">${isRequest ? 'Request submitted' : 'Report submitted'}</div>
+        <div class="tag">${rec.id}</div>
+        ${repeatCount > 1 ? `<div style="margin-bottom:14px"><span class="repeat-flag">REPEAT &middot; ${repeatCount} on record for ${esc(rec.name)}</span></div>` : ''}
+        <p style="color:var(--ink-soft);max-width:460px;margin:0 auto 22px">
+          Saved to the log. Your email draft should open automatically with everyone filled in &mdash; just hit <strong>Send</strong>. If it doesn't open, use the button below.
+        </p>
+        <div class="actions" style="justify-content:center">
+          <a class="btn btn-primary" id="emailLink" href="${mailto}" ${to ? '' : 'onclick="return false" style="opacity:.45;cursor:not-allowed"'}>${emailLabel}</a>
+          <button class="btn btn-ghost" id="anotherBtn">File another</button>
+        </div>
+        ${to ? '' : '<div class="notice">No notification email was set, so the email button is disabled.</div>'}
+      </div></div>`;
+    c.querySelector('#anotherBtn').onclick = () => { view = 'file'; render(); };
+    // Auto-open the pre-filled draft (best effort; the button is the fallback).
+    if (to) { setTimeout(() => { try { window.location.href = mailto; } catch (e) {} }, 350); }
+  }
+
+  const normName = (n) => (n || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+  // ---- METRICS ----
+  function renderMetrics() {
+    const c = document.getElementById('content');
+    const total = reports.length;
+    const byStatus = { Damaged: 0, Lost: 0, Stolen: 0, Request: 0 };
+    reports.forEach(r => { if (byStatus[r.status] != null) byStatus[r.status]++; });
+    const openCount = reports.filter(r => r.state !== 'closed').length;
+    const closedCount = reports.filter(r => r.state === 'closed').length;
+
+    // repeat issues by employee (incidents only — tool requests don't count)
+    const byEmp = {};
+    reports.forEach(r => {
+      if (r.status === 'Request') return;
+      const k = normName(r.name);
+      if (!byEmp[k]) byEmp[k] = { name: r.name, count: 0, Damaged: 0, Lost: 0, Stolen: 0, last: r.date };
+      byEmp[k].count++;
+      if (byEmp[k][r.status] != null) byEmp[k][r.status]++;
+      if (r.date > byEmp[k].last) byEmp[k].last = r.date;
+    });
+    const emps = Object.values(byEmp).sort((a, b) => b.count - a.count);
+    const maxCount = emps.length ? emps[0].count : 1;
+    const repeatCount = emps.filter(e => e.count > 1).length;
+
+    // by subdivision & equipment
+    const tally = (key) => {
+      const m = {}; reports.forEach(r => { const v = r[key] || '—'; m[v] = (m[v] || 0) + 1; });
+      return Object.entries(m).sort((a, b) => b[1] - a[1]);
+    };
+    const bySub = tally('subdivision');
+    const byEquip = tally('equipment');
+
+    c.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:22px;gap:12px;flex-wrap:wrap">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;color:var(--ink-soft);text-transform:uppercase">&#128275; Admin view &middot; signed in</div>
+        <button class="link-btn" id="lockBtn">Sign out</button>
+      </div>
+      <div class="card" style="margin-top:14px"><div class="card-body">
+        <div class="kpis">
+          <div class="kpi"><div class="v">${total}</div><div class="k">Total</div></div>
+          <div class="kpi open"><div class="v">${openCount}</div><div class="k">Open</div></div>
+          <div class="kpi closed"><div class="v">${closedCount}</div><div class="k">Closed</div></div>
+          <div class="kpi d"><div class="v">${byStatus.Damaged}</div><div class="k">Damaged</div></div>
+          <div class="kpi l"><div class="v">${byStatus.Lost}</div><div class="k">Lost</div></div>
+          <div class="kpi s"><div class="v">${byStatus.Stolen}</div><div class="k">Stolen</div></div>
+          <div class="kpi rq"><div class="v">${byStatus.Request}</div><div class="k">Requests</div></div>
+        </div>
+      </div></div>
+
+      <div class="card">
+        <div class="card-head"><span class="num">M-01</span><h2>Repeat issues by employee</h2>
+          ${repeatCount ? `<span class="repeat-flag" style="margin-left:auto">${repeatCount} repeat</span>` : ''}</div>
+        <div class="card-body" style="padding-top:8px">
+          ${emps.length ? `<table><thead><tr>
+            <th>Employee</th><th style="width:38%">Reports</th><th>D / L / S</th><th>Last</th>
+          </tr></thead><tbody>
+          ${emps.map(e => `<tr>
+            <td><strong>${esc(e.name)}</strong> ${e.count > 1 ? `<span class="repeat-flag">REPEAT &times;${e.count}</span>` : ''}</td>
+            <td><div class="count-bar"><div class="bar" style="width:${Math.max(8, (e.count / maxCount) * 160)}px"></div><span style="font-family:'IBM Plex Mono'">${e.count}</span></div></td>
+            <td style="font-family:'IBM Plex Mono';font-size:13px">${e.Damaged} / ${e.Lost} / ${e.Stolen}</td>
+            <td class="meta">${fmtDate(e.last)}</td>
+          </tr>`).join('')}
+          </tbody></table>` : '<div class="empty">No reports yet. Repeat-issue tracking will populate as reports come in.</div>'}
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top:22px;gap:22px">
+        <div class="card" style="margin-top:0">
+          <div class="card-head"><span class="num">M-02</span><h2>By subdivision</h2></div>
+          <div class="card-body" style="padding-top:8px">
+            ${bySub.length ? `<table><tbody>${bySub.map(([k, v]) =>
+              `<tr><td>${esc(k)}</td><td style="text-align:right;font-family:'IBM Plex Mono'">${v}</td></tr>`).join('')}</tbody></table>`
+              : '<div class="empty">—</div>'}
+          </div>
+        </div>
+        <div class="card" style="margin-top:0">
+          <div class="card-head"><span class="num">M-03</span><h2>By equipment</h2></div>
+          <div class="card-body" style="padding-top:8px">
+            ${byEquip.length ? `<table><tbody>${byEquip.map(([k, v]) =>
+              `<tr><td>${esc(k)}</td><td style="text-align:right;font-family:'IBM Plex Mono'">${v}</td></tr>`).join('')}</tbody></table>`
+              : '<div class="empty">—</div>'}
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><span class="num">LOG</span><h2>All reports</h2>
+          <button class="link-btn" id="exportBtn" style="margin-left:auto">Export CSV</button></div>
+        <div class="card-body" style="padding-top:8px">
+          ${total ? `<div class="toolbar">
+            <input type="text" id="search" placeholder="Search name, location, equipment…" style="flex:1;min-width:200px">
+            <select id="filterState"><option value="">Open &amp; Closed</option><option value="open">Open only</option><option value="closed">Closed only</option></select>
+            <select id="filterStatus"><option value="">All statuses</option>${STATUSES.map(s => `<option>${s}</option>`).join('')}</select>
+          </div>
+          <table id="logTable"><thead><tr>
+            <th>Photo</th><th>ID / Date</th><th>Employee</th><th>Status</th><th>State</th><th>Equipment</th><th>Subdivision</th><th>Location</th>
+          </tr></thead><tbody id="logBody"></tbody></table>`
+          : '<div class="empty">No reports filed yet.</div>'}
+        </div>
+      </div>`;
+
+    c.querySelector('#lockBtn').onclick = async () => {
+      await signOut();
+      isAdmin = false; reports = []; view = 'file'; render();
+    };
+
+    if (total) {
+      const search = c.querySelector('#search');
+      const filterStatus = c.querySelector('#filterStatus');
+      const filterState = c.querySelector('#filterState');
+      const renderLog = () => {
+        const q = (search.value || '').toLowerCase();
+        const fs = filterStatus.value;
+        const fst = filterState.value;
+        const rows = reports.slice().reverse().filter(r => {
+          const closed = r.state === 'closed';
+          if (fst === 'open' && closed) return false;
+          if (fst === 'closed' && !closed) return false;
+          if (fs && r.status !== fs) return false;
+          if (!q) return true;
+          return [r.name, r.location, r.equipment, r.subdivision, r.supervisor, r.id]
+            .some(v => (v || '').toLowerCase().includes(q));
+        });
+        c.querySelector('#logBody').innerHTML = rows.length ? rows.map(r => `
+          <tr class="log-row" data-id="${r.id}" style="cursor:pointer">
+            <td>${r.hasPhoto ? `<div class="log-thumb" data-img="${r.id}" style="background:#eee;display:flex;align-items:center;justify-content:center;font-size:10px;color:#999">IMG</div>` : '<span class="meta">—</span>'}</td>
+            <td><span style="font-family:'IBM Plex Mono';font-size:12px">${r.id}</span><div class="meta">${fmtDate(r.date)}</div></td>
+            <td>${esc(r.name)}</td>
+            <td><span class="pill ${r.status}">${r.status}</span></td>
+            <td><span class="state-badge ${r.state === 'closed' ? 'closed' : 'open'}">${r.state === 'closed' ? 'CLOSED' : 'OPEN'}</span></td>
+            <td>${esc(r.equipment)}</td>
+            <td>${esc(r.subdivision)}</td>
+            <td>${esc(r.location)}</td>
+          </tr>`).join('') : '<tr><td colspan="8" class="empty">No matches.</td></tr>';
+        c.querySelectorAll('.log-row').forEach(row => row.onclick = () => openDetail(row.dataset.id));
+        // lazy-load thumbnails
+        c.querySelectorAll('.log-thumb[data-img]').forEach(async el => {
+          const d = await loadImage(el.dataset.img);
+          if (d) { el.outerHTML = `<img class="log-thumb" src="${d}" data-open="${el.dataset.img}">`; }
+        });
+      };
+      search.oninput = renderLog;
+      filterStatus.onchange = renderLog;
+      filterState.onchange = renderLog;
+      renderLog();
+      c.querySelector('#exportBtn').onclick = exportCSV;
+    }
+  }
+
+  async function openDetail(id) {
+    const r = reports.find(x => x.id === id);
+    if (!r) return;
+    const repeat = reports.filter(x => normName(x.name) === normName(r.name)).length;
+    const img = r.hasPhoto ? await loadImage(id) : null;
+    const body = document.getElementById('modalBody');
+    body.innerHTML = `
+      <div class="card-head"><span class="num">${r.id}</span><h2>${esc(r.name)}</h2>
+        <button class="link-btn" style="margin-left:auto" id="closeModal">Close</button></div>
+      <div class="card-body">
+        ${repeat > 1 ? `<div style="margin-bottom:12px"><span class="repeat-flag">REPEAT &middot; ${repeat} reports on record</span></div>` : ''}
+        <div style="margin-bottom:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span class="pill ${r.status}">${r.status}</span>
+          <span class="state-badge ${r.state === 'closed' ? 'closed' : 'open'}">${r.state === 'closed' ? 'CLOSED' : 'OPEN'}</span>
+        </div>
+        <div class="dl-row"><span class="k">Date of incident</span><span class="v">${fmtDate(r.date)}</span></div>
+        <div class="dl-row"><span class="k">Subdivision</span><span class="v">${esc(r.subdivision)}</span></div>
+        <div class="dl-row"><span class="k">Location</span><span class="v">${esc(r.location)}</span></div>
+        <div class="dl-row"><span class="k">Equipment</span><span class="v">${esc(r.equipment)}</span></div>
+        <div class="dl-row"><span class="k">Supervisor</span><span class="v">${esc(r.supervisor)}${r.supervisorEmail ? ' · ' + esc(r.supervisorEmail) : ''}</span></div>
+        <div class="dl-row"><span class="k">Summary of events</span><span class="v" style="white-space:pre-wrap">${esc(r.summary)}</span></div>
+        ${r.state === 'closed' && r.closedAt ? `<div class="dl-row"><span class="k">Closed</span><span class="v">${fmtDate((r.closedAt || '').slice(0,10))}</span></div>` : ''}
+        ${img ? `<img src="${img}" style="margin-top:12px">` : ''}
+        <div class="field" style="margin-top:16px">
+          <label for="noteBox">Notes / resolution</label>
+          <textarea id="noteBox" style="min-height:80px">${esc(r.note || '')}</textarea>
+          <div id="noteSaved" class="err-text" style="display:none;color:var(--damaged)">Saved.</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;gap:10px;margin-top:14px;border-top:1px solid var(--line);padding-top:14px;flex-wrap:wrap">
+          <button class="btn btn-ghost" id="deleteReport" style="color:var(--stolen);border-color:var(--stolen)">Delete report</button>
+          <div style="display:flex;gap:10px">
+            <button class="btn btn-ghost" id="saveNote">Save note</button>
+            ${r.state === 'closed'
+              ? '<button class="btn btn-ghost" id="toggleState">Reopen</button>'
+              : '<button class="btn btn-primary" id="toggleState">Close report</button>'}
+          </div>
+        </div>
+      </div>`;
+    document.getElementById('modalBg').style.display = 'flex';
+    document.getElementById('closeModal').onclick = closeModal;
+
+    const noteBox = document.getElementById('noteBox');
+    const persist = async (changes, btn, busyText) => {
+      const updated = Object.assign({}, r, { note: noteBox.value }, changes || {});
+      if (btn) { btn.disabled = true; btn.dataset.txt = btn.textContent; btn.textContent = busyText; }
+      try {
+        await updateReport(r.dbId, updated);
+        const idx = reports.findIndex(x => x.id === id);
+        if (idx > -1) reports[idx] = updated;
+        return true;
+      } catch (e) {
+        console.error(e);
+        if (btn) { btn.disabled = false; btn.textContent = btn.dataset.txt; }
+        alert("Couldn't save — the database didn't respond. Check your connection and try again.");
+        return false;
+      }
+    };
+    document.getElementById('saveNote').onclick = async (e) => {
+      if (await persist({}, e.target, 'Saving…')) {
+        const n = document.getElementById('noteSaved'); n.style.display = 'block';
+        e.target.disabled = false; e.target.textContent = 'Save note';
+      }
+    };
+    document.getElementById('toggleState').onclick = async (e) => {
+      const closing = r.state !== 'closed';
+      const changes = closing ? { state: 'closed', closedAt: new Date().toISOString() } : { state: 'open', closedAt: null };
+      if (await persist(changes, e.target, closing ? 'Closing…' : 'Reopening…')) { closeModal(); renderMetrics(); }
+    };
+
+    const delBtn = document.getElementById('deleteReport');
+    delBtn.onclick = async () => {
+      if (!confirm("Delete this report permanently? It will be removed from the shared log for everyone, and this can't be undone.")) return;
+      delBtn.disabled = true; delBtn.textContent = 'Deleting…';
+      try {
+        await deleteReport(r.dbId);
+        const idx = reports.findIndex(x => x.id === id);
+        if (idx > -1) reports.splice(idx, 1);
+        closeModal();
+        renderMetrics();
+      } catch (e) {
+        console.error(e);
+        delBtn.disabled = false; delBtn.textContent = 'Delete report';
+        alert("Couldn't delete that report — the database didn't respond. Check your connection and try again.");
+      }
+    };
+  }
+  function closeModal() { document.getElementById('modalBg').style.display = 'none'; }
+
+  function exportCSV() {
+    const cols = ['id','submittedAt','status','state','closedAt','name','date','subdivision','location','equipment','supervisor','supervisorEmail','summary','note'];
+    const head = ['Report ID','Submitted','Status','State','Closed','Employee','Incident Date','Subdivision','Location','Equipment','Supervisor','Supervisor Email','Summary','Notes'];
+    const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const rows = reports.map(r => cols.map(c => q(r[c])).join(','));
+    const csv = head.map(q).join(',') + '\n' + rows.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'equipment_incident_reports.csv';
+    a.click();
+  }
+
+  // ---- init ----
+  app.innerHTML = '<div class="loading">Loading…</div>';
+  (async () => {
+    await checkSession();
+    if (isAdmin) await loadReports(); // returns nothing for anonymous filers (RLS)
+    render();
+  })();
+})();
+</script>
+</body>
+</html>
